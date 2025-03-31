@@ -1,0 +1,15 @@
+# Ignored folders
+__pycache__/
+.venv/
+env/
+.vscode/
+.idea/
+.git/
+
+# Ignored file types
+*.tar
+*.tar.gz
+*.log
+*.pt
+*.zip
+*.mp4

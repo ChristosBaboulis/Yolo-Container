@@ -1,9 +1,9 @@
 import os
-import cv2
-import requests
-from ultralytics import YOLO
+# import cv2
+# import requests
+# from ultralytics import YOLO
 from azure.eventhub import EventHubConsumerClient
-from azure.storage.blob import BlobServiceClient
+#from azure.storage.blob import BlobServiceClient
 
 print("\n🚀 Starting container...")
 
