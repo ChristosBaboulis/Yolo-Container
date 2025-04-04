@@ -1,5 +1,5 @@
 ultralytics
-opencv-python-headless
+opencv-contrib-python
 azure-eventhub
 azure-storage-blob
 azure-eventhub-checkpointstoreblob-aio

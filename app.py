@@ -1,22 +1,14 @@
 print("🚀 script started", flush=True)
 import asyncio
 from azure.eventhub.aio import EventHubConsumerClient
-import requests
 import os
 from azure.storage.blob import BlobServiceClient
 import datetime
 from azure.eventhub.extensions.checkpointstoreblobaio import BlobCheckpointStore
 import cv2
 from ultralytics import YOLO
-import time
 import json
 print("🔧 imports done", flush=True)
-
-vehicle_classes = ['car', 'truck', 'motorbike']
-distance_m = 20
-line_y1 = 423
-line_y2 = 555
-
 
 conn_str = os.getenv("EVENT_HUB_CONNECTION", "")
 storage_conn = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
@@ -25,14 +17,14 @@ checkpoint_store = BlobCheckpointStore.from_connection_string(
 )
 
 print("🔧 conn_str done", flush=True)
-print(f"🔑 conn_str = {conn_str[:30]}...", flush=True)
 
 async def on_event(partition_context, event):
     try:
         print(f"📩 Received on partition {partition_context.partition_id}", flush=True)
+
+        #------------------------------------------------------------------- EXTRACT VIDEO NAME FROM TOPIC -------------------------------------------------------------------
         video_name_raw = event.body_as_str()
         print(f"📦 Message Raw: {video_name_raw}", flush=True)
-
         # Default: use raw string (σε περίπτωση που δεν είναι JSON)
         video_name = video_name_raw
 
@@ -45,9 +37,9 @@ async def on_event(partition_context, event):
                 print(f"🧠 Extracted from JSON subject: {video_name}", flush=True)
         except Exception as e:
             print(f"⚠️ Not JSON format or parsing failed: {e}", flush=True)
+        #------------------------------------------------------------------- EXTRACT VIDEO NAME FROM TOPIC -------------------------------------------------------------------
 
-
-        # --- DOWNLOAD VIDEO ---
+        # -------------------------------------------------------------------------- DOWNLOAD VIDEO ---------------------------------------------------------------------------
         local_video = f"/tmp/{video_name}"
 
         try:
@@ -63,89 +55,241 @@ async def on_event(partition_context, event):
         except Exception as e:
             print(f"❌ Failed to download {video_name} via SDK: {e}", flush=True)
             return
+        # -------------------------------------------------------------------------- DOWNLOAD VIDEO ---------------------------------------------------------------------------
 
+        # ------------------------------------------------------------------- OPEN VIDEO - APPLY ANALYSIS --------------------------------------------------------------------
         cap = cv2.VideoCapture(local_video)
         if not cap.isOpened():
-            print(f"❌ Cannot open video: {video_name}")
+            print(f"❌ Cannot open video: {video_name}", flush=True)
             return
 
         model = YOLO("yolov8n.pt")
-        tracked = {}
-        firstLineFrame = {}
+        trackers = {}
+        next_id = 0
         speed_log = []
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+        vehicle_classes = ['car', 'truck', 'motorbike']
+        distance_m = 20
+        line_y1 = 423
+        line_y2 = 555
+
+        left_lane_count = 0
+        right_lane_count = 0
+        speeding_violations = 0
+        total_speed_left = 0.0
+        total_speed_right = 0.0
+
+        # cars per 5 min
+        interval_seconds = 300  # 5 min
+        interval_counters = {}  # {interval_number: {"left": x, "right": y, "sum_left": z, "sum_right": w}}
+
+        # ----------------------- WHILE PER FRAME OF VIDEO -----------------------
         while True:
+            # READ FRAME
             ret, frame = cap.read()
             if not ret:
                 break
-
-            results = model.track(frame, persist=True, verbose=False)[0]
             
+            # GET CURRENT FRAME
             frame_number = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
+            # SKIP FIRST SECOND OF THE VIDEO
             if frame_number < 25:
                 continue
 
-            results = model.track(frame, persist=True, verbose=False)[0]
-
-            for box in results.boxes:
-                cls = int(box.cls[0].item())
-                name = model.names[cls]
-                if name not in vehicle_classes:
+            # UPDATE BOX TRACKERS IF THEY HAVE BEEN CREATED
+            for obj_id in list(trackers.keys()):
+                data = trackers[obj_id]
+                success, bbox = data["tracker"].update(frame)
+                if not success:
+                    del trackers[obj_id]
                     continue
 
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                cx = int((x1 + x2) / 2)
-                cy = int((y1 + y2) / 2)
-                direction = "bottom_to_top" if cx < frame_width // 2 else "top_to_bottom"
+                # BOX COORDINATES
+                x, y, w, h = map(int, bbox)
+                cx = x + w // 2
+                cy = y + h // 2
+                direction = data["direction"]
 
-                track_id = int(box.id[0].item())
+                # DELETE BOX IF PASSED THE LINES OF INTEREST
+                if direction == "top_to_bottom" and ((y + h > line_y2 + 75) or x >= frame_width - 50 ):
+                    del trackers[obj_id]
+                    continue
+                elif direction == "bottom_to_top" and y < line_y1 - 75:
+                    del trackers[obj_id]
+                    continue
 
-                # Αγνοούμε αν το κέντρο είναι έξω από την περιοχή
-                if direction == "bottom_to_top":
-                    if cy < line_y1 - 75:
+                # DELETE BOX IF LEFTOVER
+                if "speed" not in data:
+                    if direction == "top_to_bottom" and (y > line_y2):
+                        del trackers[obj_id]
                         continue
-                else:
-                    if cy > line_y2 + 75:
+                    elif direction == "bottom_to_top" and y + h < line_y1:
+                        del trackers[obj_id]
                         continue
-                
-                if track_id not in tracked:
-                    tracked[track_id] = frame_number
-                
-                # Track entry and exit frames
-                if direction == "bottom_to_top":
-                    if cy == line_y2:
-                        firstLineFrame[track_id] = frame_number
-                    elif track_id in firstLineFrame and cy == line_y1:
-                        temp = firstLineFrame[track_id]
-                        print(f"tracked: {tracked.pop(track_id)}", flush=True)
-                        print(f"First: {temp}", flush=True)
-                        print(f"Last:  {frame_number}", flush=True)
-                        delta_frames = abs(frame_number - temp)
+
+                # UPDATE POSITIONS AND FRAMES
+                data["positions"].append((cx, cy))
+                data["frames"].append(frame_number)
+
+                # DETECT CROSSING LINES
+                if len(data["positions"]) >= 2:
+                    prev_y = data["positions"][-2][1]
+                    curr_y = data["positions"][-1][1]
+                    if direction == "top_to_bottom":
+                        if data["start"] is None and prev_y < line_y1 <= curr_y:
+                            data["start"] = frame_number
+                        elif data["end"] is None and prev_y < line_y2 <= curr_y:
+                            data["end"] = frame_number
+                    elif direction == "bottom_to_top":
+                        if data["start"] is None and prev_y > line_y2 >= curr_y:
+                            data["start"] = frame_number
+                        elif data["end"] is None and prev_y > line_y1 >= curr_y:
+                            data["end"] = frame_number
+
+                    # CALCULATE SPEED
+                    if data["start"] and data["end"] and "speed" not in data:
+                        delta_frames = abs(data["end"] - data["start"])
                         delta_time = delta_frames / fps
                         speed = (distance_m / delta_time) * 3.6
-                        log = f"Vehicle {track_id} - Speed: {speed:.2f} km/h (bottom_to_top) - Time: {frame_number / 25:.2f}s"
-                        speed_log.append(log)
-                        print(f"🚗 {log}", flush=True)
-                else:
-                    if cy == line_y1:
-                        firstLineFrame[track_id] = frame_number
-                    elif track_id in firstLineFrame and cy == line_y2:
-                        temp = firstLineFrame[track_id]
-                        print(f"tracked: {tracked.pop(track_id)}", flush=True)
-                        print(f"First: {temp}", flush=True)
-                        print(f"Last:  {frame_number}", flush=True)
-                        delta_frames = abs(frame_number - temp)
-                        delta_time = delta_frames / fps
-                        speed = (distance_m / delta_time) * 3.6
-                        log = f"Vehicle {track_id} - Speed: {speed:.2f} km/h (top_to_bottom) - Time: {frame_number / 25:.2f}s"
-                        speed_log.append(log)
-                        print(f"🚗 {log}", flush=True)
+                        data["speed"] = round(speed, 2)
 
-        # --- LOGGING ---
+                        if direction == "top_to_bottom":
+                            total_speed_right += data["speed"]
+                        else:
+                            total_speed_left += data["speed"]
+
+
+                        # + COUNT NUMBER OF CARS ON RIGHT/LEFT SIDES
+                        if direction == "top_to_bottom":
+                            interval_counters[current_interval]["right"] += 1
+                            interval_counters[current_interval]["sum_right"] += data["speed"]
+                        else:
+                            interval_counters[current_interval]["left"] += 1
+                            interval_counters[current_interval]["sum_left"] += data["speed"]
+
+                        # CHECK IF SPEED VIOLATION HAPPENS
+                        if (data["class"] == "car" and data["speed"] > 90) or \
+                        (data["class"] == "truck" and data["speed"] > 80):
+                            speeding_violations += 1
+
+                            # LOG PROGRESS EVERY 10 VIOLATIONS (TO BE DELETED)
+                            if speeding_violations % 10 == 0:
+                                print(f"🚨 Progress: {speeding_violations} vehicles over speed limit", flush=True)
+
+                        #REAL TIME ALERT
+                        if data["speed"] > 130:
+                            print(f"⚠️ REAL-TIME ALERT: ID:{obj_id} | {data['class']} | {data['speed']} km/h", flush=True)
+
+                        #LOG EVERY CARS SPEED FOR DEBUGGINTG (TO BE DELETED)
+                        print(f"🚗 ID:{obj_id} | Class: {data['class']} | Dir: {direction} | Speed: {data['speed']} km/h", flush=True)
+
+                        #LOG PROGRESS ON COUNTING CARS ON BOTH SIDES (TO BE DELETED)
+                        if direction == "top_to_bottom":
+                            right_lane_count += 1
+                            if right_lane_count % 10 == 0:
+                                print(f"➡️ Progress: {right_lane_count} vehicles right", flush=True)
+                        else:
+                            left_lane_count += 1
+                            if left_lane_count % 10 == 0:
+                                print(f"⬅️ Progress: {left_lane_count} vehicles left", flush=True)
+
+            #DETECT NEW VEHICLES EVERY 10 FRAMES (~0.4 SECONDS)
+            if frame_number % 10 == 0:
+                frame_time_sec = frame_number / fps
+                minutes = int(frame_time_sec // 60)
+                seconds = int(frame_time_sec % 60)
+
+                # CALCULATE THE 5 MIN INTERVAL WE ARE IN
+                current_interval = int(frame_time_sec // interval_seconds)
+                if current_interval not in interval_counters:
+                    interval_counters[current_interval] = {
+                        "left": 0,
+                        "right": 0,
+                        "sum_left": 0.0,
+                        "sum_right": 0.0
+                    }
+
+                #DETECT CARS
+                detections = model(frame, verbose=False)[0]
+                for r in detections.boxes:
+                    #DETECT AND SKIP IF NOT IN vehicle_classes
+                    cls_id = int(r.cls.item())
+                    class_name = model.names[cls_id]
+                    if class_name not in vehicle_classes:
+                        continue
+
+                    x1, y1, x2, y2 = map(int, r.xyxy[0])
+                    w = x2 - x1
+                    h = y2 - y1
+                    cx = x1 + w // 2
+
+                    #----------------------------------------------------
+                    # EXTRA CHECK BECAUSE SOMETIMES DETECTS SAME VEHICLE TWICE,
+                    # SO IF THERE IS ALREADY A BOX NEARBY, SKLIP DETECTION
+                    #  
+                    # DISTINGUISH THRESHOLD BETWEEN CAR, TRUCK
+                    threshold = 50 if class_name != "truck" else 100
+
+                    # CHECK IF THERE IS A BOX NEARBY (IN THRESHOLD)
+                    already_tracked = False
+                    for t in trackers.values():
+                        px, py = t["positions"][-1]
+                        if abs(cx - px) < threshold:
+                            already_tracked = True
+                            break
+                    #----------------------------------------------------
+
+                    # CREATE NEW TRACKER BOX
+                    if not already_tracked:
+                        # DISMISS IF IT IS OUTSIDE OF INTEREST LINE
+                        if cx < frame_width // 2 and y1 < line_y1:
+                            continue
+
+                        # DISMISS IF PASSED THE LINES
+                        if cx >= frame_width // 2 and (
+                            y2 > line_y2 + 100 or
+                            cx > frame_width - 100
+                        ):
+                            continue
+
+                        # DISMISS IF BOX IS TOO BIG (SOMETIMES DETECTS HUGE BOX WHICH INTERFEERS WITH THE REST DETECTIONS)
+                        if w > 200 or h > 200:
+                            continue
+
+                        direction = "bottom_to_top" if cx < frame_width // 2 else "top_to_bottom"
+                        if direction == "bottom_to_top" and y2 < line_y2:
+                            continue
+
+                        tracker = cv2.TrackerCSRT_create()
+                        tracker.init(frame, (x1, y1, w, h))
+                        trackers[next_id] = {
+                            "tracker": tracker,
+                            "positions": [(cx, y1 + h // 2)],
+                            "frames": [frame_number],
+                            "birth": frame_number,
+                            "class": class_name,
+                            "direction": direction,
+                            "start": None,
+                            "end": None
+                        }
+                        next_id += 1
+        # ------------------------------------------------------------------- OPEN VIDEO - APPLY ANALYSIS --------------------------------------------------------------------
+
+        # ------------------------------------------------------------------------------- LOGGING ----------------------------------------------------------------------------
         log_header = f"[{datetime.datetime.utcnow().isoformat()}] Processed: {video_name}\n"
-        log_line = log_header + "\n".join(speed_log) + "\n"
+        log_body = "\n".join(speed_log)
+        avg_speed_left = total_speed_left / left_lane_count if left_lane_count > 0 else 0
+        avg_speed_right = total_speed_right / right_lane_count if right_lane_count > 0 else 0
+
+        summary = f"\nTotal vehicles: Left = {left_lane_count} | Right = {right_lane_count}"
+        summary += f"\nTotal speed violations: {speeding_violations}"
+        summary += f"\nAverage speed: Left = {avg_speed_left:.2f} km/h | Right = {avg_speed_right:.2f} km/h"
+
+        log_line = log_header + log_body + summary + "\n"
+        
         log_filename = f"{video_name}.log"
         local_log = f"/tmp/{log_filename}"
 
@@ -159,6 +303,7 @@ async def on_event(partition_context, event):
             blob_client.upload_blob(data, overwrite=True)
 
         print(f"📝 Uploaded log to 'test-logs/{log_filename}'", flush=True)
+        # ------------------------------------------------------------------------------- LOGGING ----------------------------------------------------------------------------
 
         await partition_context.update_checkpoint(event)
 
