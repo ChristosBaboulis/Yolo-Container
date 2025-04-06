@@ -24,7 +24,7 @@ async def on_event(partition_context, event):
 
         #------------------------------------------------------------------- EXTRACT VIDEO NAME FROM TOPIC -------------------------------------------------------------------
         video_name_raw = event.body_as_str()
-        print(f"📦 Message Raw: {video_name_raw}", flush=True)
+        #print(f"📦 Message Raw: {video_name_raw}", flush=True)
         # Default: use raw string (σε περίπτωση που δεν είναι JSON)
         video_name = video_name_raw
 
@@ -80,10 +80,6 @@ async def on_event(partition_context, event):
         speeding_violations = 0
         total_speed_left = 0.0
         total_speed_right = 0.0
-
-        # cars per 5 min
-        interval_seconds = 300  # 5 min
-        interval_counters = {}  # {interval_number: {"left": x, "right": y, "sum_left": z, "sum_right": w}}
 
         # ----------------------- WHILE PER FRAME OF VIDEO -----------------------
         while True:
@@ -161,56 +157,33 @@ async def on_event(partition_context, event):
                         else:
                             total_speed_left += data["speed"]
 
-
-                        # + COUNT NUMBER OF CARS ON RIGHT/LEFT SIDES
-                        if direction == "top_to_bottom":
-                            interval_counters[current_interval]["right"] += 1
-                            interval_counters[current_interval]["sum_right"] += data["speed"]
-                        else:
-                            interval_counters[current_interval]["left"] += 1
-                            interval_counters[current_interval]["sum_left"] += data["speed"]
-
                         # CHECK IF SPEED VIOLATION HAPPENS
                         if (data["class"] == "car" and data["speed"] > 90) or \
                         (data["class"] == "truck" and data["speed"] > 80):
                             speeding_violations += 1
 
                             # LOG PROGRESS EVERY 10 VIOLATIONS (TO BE DELETED)
-                            if speeding_violations % 10 == 0:
-                                print(f"🚨 Progress: {speeding_violations} vehicles over speed limit", flush=True)
+                            #if speeding_violations % 10 == 0:
+                                #print(f"🚨 Progress: {speeding_violations} vehicles over speed limit", flush=True)
 
                         #REAL TIME ALERT
                         if data["speed"] > 130:
-                            print(f"⚠️ REAL-TIME ALERT: ID:{obj_id} | {data['class']} | {data['speed']} km/h", flush=True)
+                            print(f"⚠️ REAL-TIME ALERT: ID:{obj_id} | {data['class']} | Dir: {direction} | {data['speed']} km/h", flush=True)
 
                         #LOG EVERY CARS SPEED FOR DEBUGGINTG (TO BE DELETED)
-                        print(f"🚗 ID:{obj_id} | Class: {data['class']} | Dir: {direction} | Speed: {data['speed']} km/h", flush=True)
+                        #print(f"🚗 ID:{obj_id} | Class: {data['class']} | Dir: {direction} | Speed: {data['speed']} km/h", flush=True)
 
                         #LOG PROGRESS ON COUNTING CARS ON BOTH SIDES (TO BE DELETED)
                         if direction == "top_to_bottom":
                             right_lane_count += 1
-                            if right_lane_count % 10 == 0:
-                                print(f"➡️ Progress: {right_lane_count} vehicles right", flush=True)
                         else:
                             left_lane_count += 1
-                            if left_lane_count % 10 == 0:
-                                print(f"⬅️ Progress: {left_lane_count} vehicles left", flush=True)
 
             #DETECT NEW VEHICLES EVERY 10 FRAMES (~0.4 SECONDS)
             if frame_number % 10 == 0:
                 frame_time_sec = frame_number / fps
                 minutes = int(frame_time_sec // 60)
                 seconds = int(frame_time_sec % 60)
-
-                # CALCULATE THE 5 MIN INTERVAL WE ARE IN
-                current_interval = int(frame_time_sec // interval_seconds)
-                if current_interval not in interval_counters:
-                    interval_counters[current_interval] = {
-                        "left": 0,
-                        "right": 0,
-                        "sum_left": 0.0,
-                        "sum_right": 0.0
-                    }
 
                 #DETECT CARS
                 detections = model(frame, verbose=False)[0]
