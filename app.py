@@ -153,11 +153,24 @@ async def on_event(partition_context, event):
                         speed = (distance_m / delta_time) * 3.6
                         data["speed"] = round(speed, 2)
 
+                        # --- Timestamp Calculation ---
+                        frame_of_speed = data["end"]
+                        seconds_local = frame_of_speed / fps
+
+                        segment_number = int(video_name.split("_")[1].split(".")[0])  # eg 1 for segment_001
+                        global_seconds = seconds_local + (segment_number * 120)
+
+                        minutes = int(global_seconds // 60)
+                        seconds = int(global_seconds % 60)
+                        timestamp_str = f"{minutes:02d}:{seconds:02d}"
+                        # -----------------------------
+
                         # Unique global id for each segment, eg '0011, 0012, 0013,..' from 'segment_001.mp4'
-                        segment_number = video_name.split("_")[-1].split(".")[0]  
                         full_id = f"{segment_number}{obj_id:02d}"
 
-                        vehicle_logs.append(f"ID: {full_id} | Type: {data['class']} | Direction: {'Right' if direction == 'top_to_bottom' else 'Left'} | Speed: {data['speed']} km/h")
+                        vehicle_logs.append(
+                            f"ID: {full_id} | Type: {data['class']} | Direction: {'Right' if direction == 'top_to_bottom' else 'Left'} | Speed: {data['speed']} km/h | Time: {timestamp_str}"
+                        )
 
                         if direction == "top_to_bottom":
                             total_speed_right += data["speed"]
