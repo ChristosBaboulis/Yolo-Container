@@ -72,7 +72,7 @@ async def on_event(partition_context, event):
 
         vehicle_classes = ['car', 'truck', 'motorbike']
         distance_m = 20
-        line_y1 = 423
+        line_y1 = 415
         line_y2 = 555
 
         left_lane_count = 0
@@ -80,6 +80,7 @@ async def on_event(partition_context, event):
         speeding_violations = 0
         total_speed_left = 0.0
         total_speed_right = 0.0
+        vehicle_logs = []
 
         # ----------------------- WHILE PER FRAME OF VIDEO -----------------------
         while True:
@@ -151,6 +152,12 @@ async def on_event(partition_context, event):
                         delta_time = delta_frames / fps
                         speed = (distance_m / delta_time) * 3.6
                         data["speed"] = round(speed, 2)
+
+                        # Unique global id for each segment, eg '0011, 0012, 0013,..' from 'segment_001.mp4'
+                        segment_number = video_name.split("_")[-1].split(".")[0]  
+                        full_id = f"{segment_number}{obj_id:02d}"
+
+                        vehicle_logs.append(f"ID: {full_id} | Type: {data['class']} | Direction: {'Right' if direction == 'top_to_bottom' else 'Left'} | Speed: {data['speed']} km/h")
 
                         if direction == "top_to_bottom":
                             total_speed_right += data["speed"]
@@ -261,7 +268,9 @@ async def on_event(partition_context, event):
         summary += f"\nTotal speed violations: {speeding_violations}"
         summary += f"\nAverage speed: Left = {avg_speed_left:.2f} km/h | Right = {avg_speed_right:.2f} km/h"
 
-        log_line = log_header + log_body + summary + "\n"
+        details_section = "\n\n=== Vehicle Details ===\n" + "\n".join(vehicle_logs)
+
+        log_line = log_header + log_body + summary + details_section + "\n"
         
         log_filename = f"{video_name}.log"
         local_log = f"/tmp/{log_filename}"
