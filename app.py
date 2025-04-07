@@ -188,7 +188,7 @@ async def on_event(partition_context, event):
 
                         #REAL TIME ALERT
                         if data["speed"] > 130:
-                            print(f"⚠️ REAL-TIME ALERT: ID:{obj_id} | {data['class']} | Dir: {direction} | {data['speed']} km/h", flush=True)
+                            print(f"⚠️ REAL-TIME ALERT: ID:{full_id} | {data['class']} | Dir: {direction} | {data['speed']} km/h | Time: {timestamp_str}", flush=True)
 
                         #LOG EVERY CARS SPEED FOR DEBUGGINTG (TO BE DELETED)
                         #print(f"🚗 ID:{obj_id} | Class: {data['class']} | Dir: {direction} | Speed: {data['speed']} km/h", flush=True)
