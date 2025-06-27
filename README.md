@@ -1,6 +1,8 @@
 # YOLO-based Vehicle Speed Analysis in Azure Container App
 
-This project provides a Dockerized application for vehicle detection, tracking, and speed calculation in uploaded videos using YOLOv8 (Ultralytics) and OpenCV. The container is deployed as an Azure Container App and listens for messages from Azure Event Hub (Kafka-compatible), which are triggered by Azure Event Grid upon new video uploads to a Storage Blob Container.
+This project is the **_second_** component of the **_Vehicle Speed Calculation_** project.  
+
+This repo provides a Dockerized application for vehicle detection, tracking, and speed calculation in uploaded videos using YOLOv8 (Ultralytics) and OpenCV. The container is deployed as an Azure Container App and listens for messages from Azure Event Hub (Kafka-compatible), which are triggered by Azure Event Grid upon new video uploads to a Storage Blob Container.
 
 ## Architecture Overview
 
@@ -30,7 +32,7 @@ This project provides a Dockerized application for vehicle detection, tracking, 
 - Scales automatically via Azure Container Apps  
 - Uploads structured logs to Azure Storage  
 
-## Technologies Used
+## Tech Stack
 
 - Python 3.10+  
 - Ultralytics YOLOv8  
